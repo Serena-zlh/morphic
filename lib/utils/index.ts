@@ -5,6 +5,8 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { google } from '@ai-sdk/google'
 import { CoreMessage } from 'ai'
 
+import { createMistral } from '@/provider/index'
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
@@ -40,13 +42,20 @@ export function getModel(useSubModel = false) {
 
   // Fallback to OpenAI instead
 
-  const openai = createOpenAI({
-    baseURL: openaiApiBase, // optional base URL for proxies etc.
-    apiKey: openaiApiKey, // optional API key, default to env property OPENAI_API_KEY
-    organization: '' // optional organization
+  // const openai = createOpenAI({
+  //   baseURL: openaiApiBase, // optional base URL for proxies etc.
+  //   apiKey: openaiApiKey, // optional API key, default to env property OPENAI_API_KEY
+  //   organization: '' // optional organization
+  // })
+
+  // return openai.chat(openaiApiModel)
+
+  // TODO
+  const chatapi = createMistral({
+    apiKey: 'apiKey-todo'
   })
 
-  return openai.chat(openaiApiModel)
+  return chatapi.chat('model-id')
 }
 
 /**

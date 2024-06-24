@@ -56,9 +56,8 @@ async function submit(
   const groupeId = generateId()
 
   const useSpecificAPI = process.env.USE_SPECIFIC_API_FOR_WRITER === 'true'
-  const useOllamaProvider = !!(
-    process.env.OLLAMA_MODEL && process.env.OLLAMA_BASE_URL
-  )
+  const useOllamaProvider = false
+
   const maxMessages = useSpecificAPI ? 5 : useOllamaProvider ? 1 : 10
   // Limit the number of messages to the maximum
   messages.splice(0, Math.max(messages.length - maxMessages, 0))
@@ -80,6 +79,7 @@ async function submit(
     ? 'input_related'
     : 'inquiry'
 
+  console.log('用户请求content=', content, 'type=', type)
   // Add the user message to the state
   if (content) {
     aiState.update({
@@ -103,8 +103,9 @@ async function submit(
   async function processEvents() {
     let action = { object: { next: 'proceed' } }
     // If the user skips the task, we proceed to the search
-    if (!skip) action = (await taskManager(messages)) ?? action
+    // if (!skip) action = (await taskManager(messages)) ?? action
 
+    console.log('action动作=', action)
     if (action.object.next === 'inquire') {
       // Generate inquiry
       const inquiry = await inquire(uiStream, messages)
@@ -256,7 +257,17 @@ async function submit(
     uiStream.done()
   }
 
-  processEvents()
+  // processEvents()
+
+  aiState.done(aiState.get())
+  uiStream.append(<div>111</div>)
+  uiStream.append(
+    <ErrorCard
+      errorMessage={'测试信息' || 'An error occurred. Please try again.'}
+    />
+  )
+
+  uiStream.done()
 
   return {
     id: generateId(),
@@ -299,6 +310,7 @@ export const AI = createAI<AIState, UIState>({
     const aiState = getAIState()
     if (aiState) {
       const uiState = getUIStateFromAIState(aiState as Chat)
+      console.log('uia', uiState)
       return uiState
     } else {
       return
