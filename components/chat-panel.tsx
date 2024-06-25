@@ -42,11 +42,16 @@ export function ChatPanel({ messages, query }: ChatPanelProps) {
       }
     ])
 
+    console.log(query, messages)
     // Submit and get response message
     const data = formData || new FormData()
     if (!formData) {
       data.append('input', query)
     }
+    // const res = await fetch('/api?name=1')
+    // const json1 = await res.json()
+
+    // console.log(json1)
     const responseMessage = await submit(data)
     setMessages(currentMessages => [...currentMessages, responseMessage])
   }
