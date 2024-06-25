@@ -111,78 +111,28 @@ async function submit(
         <SearchSkeleton />
       </Section>
     )
-    //step1 search
-    console.log('search:', userInput)
-    const searchResponse = await fetch(process.env.BACKEND_URL + '/search', {
-      method: 'POST',
-      body: JSON.stringify({
-        query: userInput,
-        search_source: 'web',
-        is_eval: false,
-        user_id: 'string',
-        zipcode: '10086'
-      })
-    })
-
-    const { turn_id, result } = await searchResponse.json()
-
-    uiStream.update(
-      <Section title="Sources">
-        <SearchResults results={result} />
-      </Section>
-    )
-
-    aiState.update({
-      ...aiState.get(),
-      messages: [
-        ...aiState.get().messages,
-        {
-          id: groupeId,
-          role: 'assistant',
-          content: result,
-          name: 'search',
-          type: 'tool'
-        }
-      ]
-    })
-
-    // step2 Generate the answer
-    let answer = ''
-    let errorOccurred = false
-    const streamText = createStreamableValue<string>()
-
-    const answerResponse = await fetch(process.env.BACKEND_URL + '/generate', {
-      method: 'POST',
-      body: JSON.stringify({
-        turn_id,
-        model_id: null
-      })
-    })
-
-    // wiki: https://developer.mozilla.org/en-US/docs/Web/API/Streams_API/Using_readable_streams
-
-    if (answerResponse?.body) {
-      uiStream.append(<AnswerSection result={streamText.value} />)
-
-      let done = false
-      const utf8Decoder = new TextDecoder('utf-8')
-      const reader = answerResponse.body?.getReader()
-
-      while (!done) {
-        const { value, done: readerDone } = await reader.read()
-        done = readerDone
-        const text = utf8Decoder.decode(value)
-
-        answer += text
-        streamText.update(answer)
-      }
-
-      messages.push({
-        role: 'assistant',
-        content: answer
+    try {
+      //step1 search
+      console.log('search:', userInput)
+      const searchResponse = await fetch(process.env.BACKEND_URL + '/search', {
+        method: 'POST',
+        body: JSON.stringify({
+          query: userInput,
+          search_source: 'web',
+          is_eval: false,
+          user_id: 'string',
+          zipcode: '10086'
+        })
       })
 
-      streamText.done()
+      const { turn_id, result } = await searchResponse.json()
+
+      uiStream.update(
+        <Section title="Sources">
+          <SearchResults results={result} />
+        </Section>
+      )
+
       aiState.update({
         ...aiState.get(),
         messages: [
@@ -190,41 +140,105 @@ async function submit(
           {
             id: groupeId,
             role: 'assistant',
-            content: answer,
-            type: 'answer'
+            content: result,
+            name: 'search',
+            type: 'tool'
           }
         ]
       })
-    }
 
-    // step3 next one
-    uiStream.append(
-      <Section title="Follow-up">
-        <FollowupPanel />
-      </Section>
-    )
-    aiState.done({
-      ...aiState.get(),
-      messages: [
-        ...aiState.get().messages,
-        // {
-        //   id: groupeId,
-        //   role: 'assistant',
-        //   content: JSON.stringify(relatedQueries),
-        //   type: 'related'
-        // },
+      // step2 Generate the answer
+      let answer = ''
+      let errorOccurred = false
+      const streamText = createStreamableValue<string>()
+
+      const answerResponse = await fetch(
+        process.env.BACKEND_URL + '/generate',
         {
-          id: groupeId,
-          role: 'assistant',
-          content: 'followup',
-          type: 'followup'
+          method: 'POST',
+          body: JSON.stringify({
+            turn_id,
+            model_id: null
+          })
         }
-      ]
-    })
+      )
 
-    // 处理完成，关闭
-    isGenerating.done(false)
-    uiStream.done()
+      // wiki: https://developer.mozilla.org/en-US/docs/Web/API/Streams_API/Using_readable_streams
+
+      if (answerResponse?.body) {
+        uiStream.append(<AnswerSection result={streamText.value} />)
+
+        let done = false
+        const utf8Decoder = new TextDecoder('utf-8')
+        const reader = answerResponse.body?.getReader()
+
+        while (!done) {
+          const { value, done: readerDone } = await reader.read()
+          done = readerDone
+          const text = utf8Decoder.decode(value)
+
+          answer += text
+          streamText.update(answer)
+        }
+
+        messages.push({
+          role: 'assistant',
+          content: answer
+        })
+
+        streamText.done()
+        aiState.update({
+          ...aiState.get(),
+          messages: [
+            ...aiState.get().messages,
+            {
+              id: groupeId,
+              role: 'assistant',
+              content: answer,
+              type: 'answer'
+            }
+          ]
+        })
+      }
+
+      // step3 next one
+      uiStream.append(
+        <Section title="Follow-up">
+          <FollowupPanel />
+        </Section>
+      )
+      aiState.done({
+        ...aiState.get(),
+        messages: [
+          ...aiState.get().messages,
+          // {
+          //   id: groupeId,
+          //   role: 'assistant',
+          //   content: JSON.stringify(relatedQueries),
+          //   type: 'related'
+          // },
+          {
+            id: groupeId,
+            role: 'assistant',
+            content: 'followup',
+            type: 'followup'
+          }
+        ]
+      })
+    } catch (error: any) {
+      aiState.done(aiState.get())
+      uiStream.append(
+        <ErrorCard
+          errorMessage={
+            error?.message || 'An error occurred. Please try again.'
+          }
+        />
+      )
+    } finally {
+      // 处理完成，关闭
+      isGenerating.done(false)
+      uiStream.done()
+    }
   }
 
   // processEvents()
