@@ -50,7 +50,7 @@ export function SearchResults({ results }: SearchResultsProps) {
                     </AvatarFallback>
                   </Avatar>
                   <div className="text-xs opacity-60 truncate">
-                    {`${displayUrlName(result.url)} - ${index + 1}`}
+                    {displayUrlName(result.url)}
                   </div>
                 </div>
               </CardContent>

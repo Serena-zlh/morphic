@@ -16,7 +16,7 @@ export async function GET(request: Request) {
         const response = await fetch(process.env.BACKEND_URL + '/search', {
             method: "POST",
 
-            body: JSON.stringify(queryData)
+            body: JSON.stringify({ query: 'buy a book', search_source: 'web', is_eval: false })
         })
 
         const data = await response.json()

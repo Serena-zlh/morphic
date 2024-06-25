@@ -24,6 +24,8 @@ import { VideoSearchSection } from '@/components/video-search-section'
 import { transformToolMessages } from '@/lib/utils'
 import { AnswerSection } from '@/components/answer-section'
 import { ErrorCard } from '@/components/error-card'
+import { SearchResults } from '@/components/search-results'
+import { SearchSkeleton } from '@/components/search-skeleton'
 
 async function submit(
   formData?: FormData,
@@ -39,6 +41,7 @@ async function submit(
 
   const aiMessages = [...(retryMessages ?? aiState.get().messages)]
   // Get the messages from the state, filter out the tool messages
+  //  CoreMessage like {role:'', content:''}
   const messages: CoreMessage[] = aiMessages
     .filter(
       message =>
@@ -58,7 +61,7 @@ async function submit(
   const useSpecificAPI = process.env.USE_SPECIFIC_API_FOR_WRITER === 'true'
   const useOllamaProvider = false
 
-  const maxMessages = useSpecificAPI ? 5 : useOllamaProvider ? 1 : 10
+  const maxMessages = 5
   // Limit the number of messages to the maximum
   messages.splice(0, Math.max(messages.length - maxMessages, 0))
   // Get the user input from the form data
@@ -79,7 +82,6 @@ async function submit(
     ? 'input_related'
     : 'inquiry'
 
-  console.log('用户请求content=', content, 'type=', type)
   // Add the user message to the state
   if (content) {
     aiState.update({
@@ -100,107 +102,85 @@ async function submit(
     })
   }
 
-  async function processEvents() {
-    let action = { object: { next: 'proceed' } }
-    // If the user skips the task, we proceed to the search
-    // if (!skip) action = (await taskManager(messages)) ?? action
-
-    console.log('action动作=', action)
-    if (action.object.next === 'inquire') {
-      // Generate inquiry
-      const inquiry = await inquire(uiStream, messages)
-      uiStream.done()
-      isGenerating.done()
-      isCollapsed.done(false)
-      aiState.done({
-        ...aiState.get(),
-        messages: [
-          ...aiState.get().messages,
-          {
-            id: generateId(),
-            role: 'assistant',
-            content: `inquiry: ${inquiry?.question}`,
-            type: 'inquiry'
-          }
-        ]
-      })
-      return
-    }
-
-    // Set the collapsed state to true
+  async function getTurnProcess() {
+    uiStream.append(<Spinner />)
     isCollapsed.done(true)
 
-    //  Generate the answer
+    uiStream.update(
+      <Section className="pt-2 pb-0">
+        <SearchSkeleton />
+      </Section>
+    )
+    //step1 search
+    console.log('search:', userInput)
+    const searchResponse = await fetch(process.env.BACKEND_URL + '/search', {
+      method: 'POST',
+      body: JSON.stringify({
+        query: userInput,
+        search_source: 'web',
+        is_eval: false,
+        user_id: 'string',
+        zipcode: '10086'
+      })
+    })
+
+    const { turn_id, result } = await searchResponse.json()
+
+    uiStream.update(
+      <Section title="Sources">
+        <SearchResults results={result} />
+      </Section>
+    )
+
+    aiState.update({
+      ...aiState.get(),
+      messages: [
+        ...aiState.get().messages,
+        {
+          id: groupeId,
+          role: 'assistant',
+          content: result,
+          name: 'search',
+          type: 'tool'
+        }
+      ]
+    })
+
+    // step2 Generate the answer
     let answer = ''
-    let toolOutputs: ToolResultPart[] = []
     let errorOccurred = false
     const streamText = createStreamableValue<string>()
-    uiStream.update(<Spinner />)
 
-    // If useSpecificAPI is enabled, only function calls will be made
-    // If not using a tool, this model generates the answer
-    while (
-      useSpecificAPI
-        ? toolOutputs.length === 0 && answer.length === 0
-        : answer.length === 0 && !errorOccurred
-    ) {
-      // Search the web and generate the answer
-      const { fullResponse, hasError, toolResponses } = await researcher(
-        uiStream,
-        streamText,
-        messages,
-        useSpecificAPI
-      )
-      answer = fullResponse
-      toolOutputs = toolResponses
-      errorOccurred = hasError
+    const answerResponse = await fetch(process.env.BACKEND_URL + '/generate', {
+      method: 'POST',
+      body: JSON.stringify({
+        turn_id,
+        model_id: null
+      })
+    })
 
-      if (toolOutputs.length > 0) {
-        toolOutputs.map(output => {
-          aiState.update({
-            ...aiState.get(),
-            messages: [
-              ...aiState.get().messages,
-              {
-                id: groupeId,
-                role: 'tool',
-                content: JSON.stringify(output.result),
-                name: output.toolName,
-                type: 'tool'
-              }
-            ]
-          })
-        })
+    // wiki: https://developer.mozilla.org/en-US/docs/Web/API/Streams_API/Using_readable_streams
+
+    if (answerResponse?.body) {
+      uiStream.append(<AnswerSection result={streamText.value} />)
+
+      let done = false
+      const utf8Decoder = new TextDecoder('utf-8')
+      const reader = answerResponse.body?.getReader()
+
+      while (!done) {
+        const { value, done: readerDone } = await reader.read()
+        done = readerDone
+        const text = utf8Decoder.decode(value)
+
+        answer += text
+        streamText.update(answer)
       }
-    }
 
-    // If useSpecificAPI is enabled, generate the answer using the specific model
-    if (useSpecificAPI && answer.length === 0 && !errorOccurred) {
-      // modify the messages to be used by the specific model
-      const modifiedMessages = transformToolMessages(messages)
-      const latestMessages = modifiedMessages.slice(maxMessages * -1)
-      const { response, hasError } = await writer(
-        uiStream,
-        streamText,
-        latestMessages
-      )
-      answer = response
-      errorOccurred = hasError
-    }
-
-    if (!errorOccurred) {
-      const useGoogleProvider = process.env.GOOGLE_GENERATIVE_AI_API_KEY
-      const useOllamaProvider = !!(
-        process.env.OLLAMA_MODEL && process.env.OLLAMA_BASE_URL
-      )
-      let processedMessages = messages
-      // If using Google provider, we need to modify the messages
-      if (useGoogleProvider) {
-        processedMessages = transformToolMessages(messages)
-      }
-      if (useOllamaProvider) {
-        processedMessages = [{ role: 'assistant', content: answer }]
-      }
+      messages.push({
+        role: 'assistant',
+        content: answer
+      })
 
       streamText.done()
       aiState.update({
@@ -215,59 +195,41 @@ async function submit(
           }
         ]
       })
-
-      // Generate related queries
-      const relatedQueries = await querySuggestor(uiStream, processedMessages)
-      // Add follow-up panel
-      uiStream.append(
-        <Section title="Follow-up">
-          <FollowupPanel />
-        </Section>
-      )
-
-      aiState.done({
-        ...aiState.get(),
-        messages: [
-          ...aiState.get().messages,
-          {
-            id: groupeId,
-            role: 'assistant',
-            content: JSON.stringify(relatedQueries),
-            type: 'related'
-          },
-          {
-            id: groupeId,
-            role: 'assistant',
-            content: 'followup',
-            type: 'followup'
-          }
-        ]
-      })
-    } else {
-      aiState.done(aiState.get())
-      streamText.done()
-      uiStream.append(
-        <ErrorCard
-          errorMessage={answer || 'An error occurred. Please try again.'}
-        />
-      )
     }
 
+    // step3 next one
+    uiStream.append(
+      <Section title="Follow-up">
+        <FollowupPanel />
+      </Section>
+    )
+    aiState.done({
+      ...aiState.get(),
+      messages: [
+        ...aiState.get().messages,
+        // {
+        //   id: groupeId,
+        //   role: 'assistant',
+        //   content: JSON.stringify(relatedQueries),
+        //   type: 'related'
+        // },
+        {
+          id: groupeId,
+          role: 'assistant',
+          content: 'followup',
+          type: 'followup'
+        }
+      ]
+    })
+
+    // 处理完成，关闭
     isGenerating.done(false)
     uiStream.done()
   }
 
   // processEvents()
 
-  aiState.done(aiState.get())
-  uiStream.append(<div>111</div>)
-  uiStream.append(
-    <ErrorCard
-      errorMessage={'测试信息' || 'An error occurred. Please try again.'}
-    />
-  )
-
-  uiStream.done()
+  getTurnProcess()
 
   return {
     id: generateId(),
@@ -307,52 +269,58 @@ export const AI = createAI<AIState, UIState>({
   onGetUIState: async () => {
     'use server'
 
+    // TODO 恢复历史记录
+    // const historyFromDB: ServerMessage[] = await loadChatFromDB();
+    // const historyFromApp: ServerMessage[] = getAIState();
     const aiState = getAIState()
+
     if (aiState) {
       const uiState = getUIStateFromAIState(aiState as Chat)
-      console.log('uia', uiState)
+
       return uiState
     } else {
       return
     }
   },
+  // TODO: save the state to database if done = true.
+  // trigger call when state update
   onSetAIState: async ({ state, done }) => {
     'use server'
 
-    // Check if there is any message of type 'answer' in the state messages
-    if (!state.messages.some(e => e.type === 'answer')) {
-      return
-    }
+    // // Check if there is any message of type 'answer' in the state messages
+    // if (!state.messages.some(e => e.type === 'answer')) {
+    //   return
+    // }
 
-    const { chatId, messages } = state
-    const createdAt = new Date()
-    const userId = 'anonymous'
-    const path = `/search/${chatId}`
-    const title =
-      messages.length > 0
-        ? JSON.parse(messages[0].content)?.input?.substring(0, 100) ||
-          'Untitled'
-        : 'Untitled'
-    // Add an 'end' message at the end to determine if the history needs to be reloaded
-    const updatedMessages: AIMessage[] = [
-      ...messages,
-      {
-        id: generateId(),
-        role: 'assistant',
-        content: `end`,
-        type: 'end'
-      }
-    ]
+    // const { chatId, messages } = state
+    // const createdAt = new Date()
+    // const userId = 'anonymous'
+    // const path = `/search/${chatId}`
+    // const title =
+    //   messages.length > 0
+    //     ? JSON.parse(messages[0].content)?.input?.substring(0, 100) ||
+    //       'Untitled'
+    //     : 'Untitled'
+    // // Add an 'end' message at the end to determine if the history needs to be reloaded
+    // const updatedMessages: AIMessage[] = [
+    //   ...messages,
+    //   {
+    //     id: generateId(),
+    //     role: 'assistant',
+    //     content: `end`,
+    //     type: 'end'
+    //   }
+    // ]
 
-    const chat: Chat = {
-      id: chatId,
-      createdAt,
-      userId,
-      path,
-      title,
-      messages: updatedMessages
-    }
-    await saveChat(chat)
+    // const chat: Chat = {
+    //   id: chatId,
+    //   createdAt,
+    //   userId,
+    //   path,
+    //   title,
+    //   messages: updatedMessages
+    // }
+    // await saveChat(chat)
   }
 })
 
@@ -409,9 +377,7 @@ export const getUIStateFromAIState = (aiState: Chat) => {
               return {
                 id,
                 component: (
-                  <Section title="Related" separator={true}>
-                    <SearchRelated relatedQueries={relatedQueries.value} />
-                  </Section>
+                  <SearchRelated relatedQueries={relatedQueries.value} />
                 )
               }
             case 'followup':
